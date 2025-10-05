@@ -49,7 +49,7 @@ main() {
 
 ### Local Development
 1. **Clone the repository**
-2. **Set up environment**: Copy `.env.example` to `.env` and configure
+2. **Set up environment**: Copy `.env.example` to `.env` and configure with your site details
 3. **Test commands**: Use `--help` to verify installation
 4. **Debug mode**: Use `bash -x wp-manager.sh <command>` for debugging
 
@@ -94,26 +94,30 @@ show_usage() {
 ## Configuration Management
 
 ### Environment Variables
-The script uses two configuration patterns:
+The script uses a site-key based configuration system. Copy `.env.example` to `.env` and configure:
 
-#### Site Key Pattern (Recommended)
+#### Site Key Pattern (Required)
 ```bash
-SITEKEY_PROD_SSH="user@prod-server.com"
-SITEKEY_STAGE_SSH="user@stage-server.com"
-SITEKEY_PROD_PATH="/path/to/production"
-SITEKEY_STAGE_PATH="/path/to/staging"
-SITEKEY_PROD_URL="https://yoursite.com"
-SITEKEY_STAGE_URL="https://staging.yoursite.com"
+# For each site, define 6 variables using the pattern: {SITE_KEY}_{ENVIRONMENT}_{TYPE}
+YOURSITE_PROD_SSH="user@prod-server.com"
+YOURSITE_STAGE_SSH="user@stage-server.com"
+YOURSITE_PROD_PATH="/path/to/production"
+YOURSITE_STAGE_PATH="/path/to/staging"
+YOURSITE_PROD_URL="https://yoursite.com"
+YOURSITE_STAGE_URL="https://staging.yoursite.com"
 ```
 
-#### Legacy Pattern (for backup/restore)
+#### Global Configuration (Optional)
 ```bash
+# Customize backup settings
+LOCAL_BACKUP_DIR=./backups
+BACKUP_RETENTION_DAYS=7
+
+# Restore operation settings (when needed)
 REMOTE_USER="your_username"
 REMOTE_HOST="your-server.com"
-LOCAL_BACKUP_DIR="~/wp_backups"
 REMOTE_BACKUP_DIR="wp_backups"
-SITE_PATHS="site1\nsite2\nsite3"
-SITE_NAMES="Site1\nSite2\nSite3"
+REMOTE_WP_PATH="/var/www/wordpress"
 ```
 
 ### Configuration Validation

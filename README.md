@@ -18,7 +18,11 @@ A unified command-line interface for WordPress backup, restore, and staging oper
    chmod +x wp-manager.sh
    ```
 
-2. Set up your `.env` file with site configurations
+2. Copy `.env.example` to `.env` and configure with your site details:
+   ```bash
+   cp .env.example .env
+   # Edit .env with your actual site configurations
+   ```
 
 3. Test the installation:
    ```bash
@@ -172,9 +176,11 @@ List and manage available local backup files for backup inventory and restore po
 
 ## Configuration
 
-### Site Key Configuration (Recommended)
+The script uses a site-key based configuration system. Copy `.env.example` to `.env` and configure with your actual values:
+
+### Site Key Configuration (Required)
 ```bash
-# For each site, define 6 variables
+# For each site, define 6 variables using the pattern: {SITE_KEY}_{ENVIRONMENT}_{TYPE}
 YOURSITE_PROD_SSH="user@prod-server.com"
 YOURSITE_STAGE_SSH="user@stage-server.com"
 YOURSITE_PROD_PATH="/var/www/yoursite"
@@ -191,22 +197,17 @@ BLOG_PROD_URL="https://blog.yoursite.com"
 BLOG_STAGE_URL="https://staging-blog.yoursite.com"
 ```
 
-### Legacy Configuration (for backup/restore)
+### Global Configuration (Optional)
 ```bash
-# Multi-site backup configuration
-SITE_PATHS="public_html
-staging_html
-dev_html"
+# Customize backup settings
+LOCAL_BACKUP_DIR=./backups
+BACKUP_RETENTION_DAYS=7
 
-SITE_NAMES="production
-staging
-development"
-
-# General settings
+# Restore operation settings (when needed)
 REMOTE_USER="your_username"
 REMOTE_HOST="your-server.com"
-LOCAL_BACKUP_DIR="~/wp_backups"
 REMOTE_BACKUP_DIR="wp_backups"
+REMOTE_WP_PATH="/var/www/wordpress"
 ```
 
 ## Options

@@ -1,204 +1,361 @@
-#!/bin/zsh
-
+#!/usr/bin/env bash
 # ====================================================================
-# WordPress Production to Staging Clone Script
+# WordPress Production to Staging Clone Script (Hybrid Approach)
 # --------------------------------------------------------------------
 # This script clones a WordPress production environment to staging
-# for testing and development purposes. It creates a complete copy
-# of the production database and files in a staging environment.
-#
-# Configuration is handled via a .env file in the same directory.
+# with support for both interactive and automated modes.
+# 
+# Features:
+# - Multi-site support via site keys
+# - Object-oriented style with safety features
+# - Interactive mode for manual operations
+# - Automated mode for cron jobs
+# - Comprehensive backup and rollback capabilities
 # ====================================================================
 
-# === Load .env file ===
-# Locates the .env file relative to the script's location.
-ENV_FILE="${0:A:h}/.env"
-if [ -f "$ENV_FILE" ]; then
-  # Exports variables from the .env file for use in the script.
-  export $(grep -v '^#' "$ENV_FILE" | xargs)
-else
-  echo "❌ .env file not found at $ENV_FILE"
-  echo "Please create a .env file with the required configuration variables."
-  exit 1
-fi
+set -euo pipefail
 
-# === SSH COMMAND WRAPPER ===
-# A helper function to execute commands on the remote server.
-# Simplifies running remote commands by handling the SSH connection details.
-ssh_cmd() {
-  ssh "${REMOTE_USER}@${REMOTE_HOST}" "$1"
+# === GLOBAL VARIABLES ===
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="${SCRIPT_DIR}/.env"
+INTERACTIVE_MODE=false
+SITE_KEY=""
+BACKUP_RETENTION_DAYS=7
+
+# === LOAD ENVIRONMENT ===
+load_environment() {
+    if [ -f "$ENV_FILE" ]; then
+        # Export variables from .env file, ignoring comments
+        set -a
+        source "$ENV_FILE"
+        set +a
+    else
+        echo "❌ .env file not found at $ENV_FILE"
+        echo "Please create a .env file with your site configurations."
+        exit 1
+    fi
 }
 
-# === VALIDATION FUNCTIONS ===
-validate_config() {
-  local missing_vars=()
-  
-  # Check required variables
-  [ -z "$PROD_SITE_PATH" ] && missing_vars+=("PROD_SITE_PATH")
-  [ -z "$STAGING_SITE_PATH" ] && missing_vars+=("STAGING_SITE_PATH")
-  [ -z "$PROD_DB_NAME" ] && missing_vars+=("PROD_DB_NAME")
-  [ -z "$STAGING_DB_NAME" ] && missing_vars+=("STAGING_DB_NAME")
-  [ -z "$REMOTE_USER" ] && missing_vars+=("REMOTE_USER")
-  [ -z "$REMOTE_HOST" ] && missing_vars+=("REMOTE_HOST")
-  [ -z "$STAGING_URL" ] && missing_vars+=("STAGING_URL")
-  
-  if [ ${#missing_vars[@]} -gt 0 ]; then
-    echo "❌ Missing required configuration variables:"
-    printf "   - %s\n" "${missing_vars[@]}"
-    echo "Please check your .env file."
-    exit 1
-  fi
+# === UTILITY FUNCTIONS ===
+log_info() {
+    echo "ℹ️  $1"
 }
 
-# === BACKUP FUNCTIONS ===
-create_staging_backup() {
-  local timestamp=$(date +'%Y-%m-%d_%H-%M-%S')
-  local backup_dir="${STAGING_BACKUP_DIR:-~/staging_backups}/${timestamp}"
-  
-  echo "📦 Creating backup of current staging environment..."
-  ssh_cmd "mkdir -p ${backup_dir}"
-  
-  # Backup staging database if it exists
-  if ssh_cmd "cd ~/${STAGING_SITE_PATH} && wp db check --quiet" 2>/dev/null; then
-    echo "  - Backing up staging database..."
-    ssh_cmd "cd ~/${STAGING_SITE_PATH} && wp db export ${backup_dir}/staging_db_backup_${timestamp}.sql --quiet"
-  fi
-  
-  # Backup staging files if they exist
-  if ssh_cmd "[ -d ~/${STAGING_SITE_PATH} ]"; then
-    echo "  - Backing up staging files..."
-    ssh_cmd "cd ~ && tar -czf ${backup_dir}/staging_files_backup_${timestamp}.tar.gz ${STAGING_SITE_PATH}"
-  fi
-  
-  echo "  - Staging backup created at: ${backup_dir}"
+log_success() {
+    echo "✅ $1"
 }
 
-# === CLONE FUNCTIONS ===
-clone_database() {
-  echo "🔄 Cloning production database to staging..."
-  
-  # Create staging database if it doesn't exist
-  ssh_cmd "mysql -e 'CREATE DATABASE IF NOT EXISTS ${STAGING_DB_NAME};'"
-  
-  # Export production database
-  local temp_db_file="/tmp/prod_db_export_$(date +%s).sql"
-  echo "  - Exporting production database..."
-  ssh_cmd "cd ~/${PROD_SITE_PATH} && wp db export ${temp_db_file} --quiet"
-  
-  # Import to staging database
-  echo "  - Importing to staging database..."
-  ssh_cmd "mysql ${STAGING_DB_NAME} < ${temp_db_file}"
-  
-  # Update staging database configuration
-  echo "  - Updating staging database configuration..."
-  ssh_cmd "cd ~/${STAGING_SITE_PATH} && wp config set DB_NAME ${STAGING_DB_NAME} --type=constant"
-  ssh_cmd "cd ~/${STAGING_SITE_PATH} && wp config set DB_HOST ${STAGING_DB_HOST:-localhost} --type=constant"
-  ssh_cmd "cd ~/${STAGING_SITE_PATH} && wp config set DB_USER ${STAGING_DB_USER:-${DB_USER}} --type=constant"
-  ssh_cmd "cd ~/${STAGING_SITE_PATH} && wp config set DB_PASSWORD ${STAGING_DB_PASSWORD:-${DB_PASSWORD}} --type=constant"
-  
-  # Update site URLs
-  echo "  - Updating site URLs..."
-  ssh_cmd "cd ~/${STAGING_SITE_PATH} && wp search-replace '${PROD_URL}' '${STAGING_URL}' --all-tables --dry-run"
-  ssh_cmd "cd ~/${STAGING_SITE_PATH} && wp search-replace '${PROD_URL}' '${STAGING_URL}' --all-tables"
-  
-  # Clean up temp file
-  ssh_cmd "rm ${temp_db_file}"
-  
-  echo "  ✅ Database cloning completed!"
+log_warning() {
+    echo "⚠️  $1"
 }
 
-clone_files() {
-  echo "📁 Cloning production files to staging..."
-  
-  # Create staging directory if it doesn't exist
-  ssh_cmd "mkdir -p ~/${STAGING_SITE_PATH}"
-  
-  # Copy files from production to staging
-  echo "  - Copying files..."
-  ssh_cmd "rsync -av --delete ~/${PROD_SITE_PATH}/ ~/${STAGING_SITE_PATH}/"
-  
-  # Update wp-config.php for staging
-  echo "  - Updating wp-config.php for staging..."
-  ssh_cmd "cd ~/${STAGING_SITE_PATH} && wp config set WP_DEBUG true --type=constant"
-  ssh_cmd "cd ~/${STAGING_SITE_PATH} && wp config set WP_DEBUG_LOG true --type=constant"
-  ssh_cmd "cd ~/${STAGING_SITE_PATH} && wp config set WP_DEBUG_DISPLAY false --type=constant"
-  
-  # Add staging-specific configuration
-  if [ -n "$STAGING_ENV" ]; then
-    ssh_cmd "cd ~/${STAGING_SITE_PATH} && wp config set WP_ENV '${STAGING_ENV}' --type=constant"
-  fi
-  
-  echo "  ✅ Files cloning completed!"
+log_error() {
+    echo "❌ $1" >&2
 }
 
-# === CLEANUP FUNCTIONS ===
-cleanup_old_backups() {
-  local backup_dir="${STAGING_BACKUP_DIR:-~/staging_backups}"
-  local retention_days="${STAGING_BACKUP_RETENTION_DAYS:-7}"
-  
-  echo "🧹 Cleaning up old staging backups (older than ${retention_days} days)..."
-  ssh_cmd "find ${backup_dir} -type d -mtime +${retention_days} -exec rm -rf {} + 2>/dev/null || true"
+log_step() {
+    echo "🔹 $1"
+}
+
+# === VALIDATION CLASS ===
+class_Validator() {
+    validate_site_key() {
+        local site_key="$1"
+        if [ -z "$site_key" ]; then
+            log_error "Site key is required"
+            return 1
+        fi
+        
+        # Convert to uppercase for consistency
+        SITE_KEY=$(echo "$site_key" | tr '[:lower:]' '[:upper:]')
+        
+        # Check if required environment variables exist
+        local required_vars=(
+            "${SITE_KEY}_PROD_SSH"
+            "${SITE_KEY}_STAGE_SSH" 
+            "${SITE_KEY}_PROD_PATH"
+            "${SITE_KEY}_STAGE_PATH"
+            "${SITE_KEY}_PROD_URL"
+            "${SITE_KEY}_STAGE_URL"
+        )
+        
+        for var in "${required_vars[@]}"; do
+            if [ -z "${!var:-}" ]; then
+                log_error "Required variable '$var' not found in .env"
+                log_error "Please ensure all required variables are set for site key: $SITE_KEY"
+                return 1
+            fi
+        done
+        
+        return 0
+    }
+    
+    validate_ssh_connections() {
+        log_step "Validating SSH connections..."
+        
+        # Test production SSH connection
+        if ! ssh -o ConnectTimeout=10 -o BatchMode=yes "${!PROD_SSH_VAR}" "echo 'SSH connection test'" >/dev/null 2>&1; then
+            log_error "Cannot connect to production server: ${!PROD_SSH_VAR}"
+            return 1
+        fi
+        
+        # Test staging SSH connection
+        if ! ssh -o ConnectTimeout=10 -o BatchMode=yes "${!STAGE_SSH_VAR}" "echo 'SSH connection test'" >/dev/null 2>&1; then
+            log_error "Cannot connect to staging server: ${!STAGE_SSH_VAR}"
+            return 1
+        fi
+        
+        log_success "SSH connections validated"
+        return 0
+    }
+}
+
+# === BACKUP MANAGER CLASS ===
+class_BackupManager() {
+    create_staging_backup() {
+        local backup_timestamp=$(date +%Y%m%d-%H%M%S)
+        local backup_file="staging-backup-${backup_timestamp}.sql"
+        
+        log_step "Creating staging backup..."
+        
+        if ssh "${!STAGE_SSH_VAR}" "cd ${!STAGE_PATH_VAR} && wp db check --quiet" 2>/dev/null; then
+            ssh "${!STAGE_SSH_VAR}" "cd ${!STAGE_PATH_VAR} && wp db export ${backup_file} --quiet"
+            log_success "Staging backup created: ${backup_file}"
+            echo "${backup_file}"
+        else
+            log_warning "No existing staging database found, skipping backup"
+            echo ""
+        fi
+    }
+    
+    cleanup_old_backups() {
+        log_step "Cleaning up old backups (older than ${BACKUP_RETENTION_DAYS} days)..."
+        
+        ssh "${!STAGE_SSH_VAR}" "
+            find ${!STAGE_PATH_VAR} -name 'staging-backup-*.sql' -type f -mtime +${BACKUP_RETENTION_DAYS} -delete 2>/dev/null || true
+        "
+        
+        log_success "Old backups cleaned up"
+    }
+}
+
+# === DATABASE MANAGER CLASS ===
+class_DatabaseManager() {
+    export_production_db() {
+        local sql_dump="./${SITE_KEY,,}-$(date +%Y%m%d-%H%M%S).sql"
+        
+        log_step "Exporting production database..."
+        ssh "${!PROD_SSH_VAR}" "cd ${!PROD_PATH_VAR} && wp db export $(basename "$sql_dump") --quiet"
+        
+        log_step "Downloading SQL dump..."
+        scp "${!PROD_SSH_VAR}:${!PROD_PATH_VAR}/$(basename "$sql_dump")" "$sql_dump"
+        
+        echo "$sql_dump"
+    }
+    
+    import_to_staging() {
+        local sql_dump="$1"
+        
+        log_step "Uploading dump to staging..."
+        scp "$sql_dump" "${!STAGE_SSH_VAR}:${!STAGE_PATH_VAR}/"
+        
+        log_step "Importing database to staging..."
+        ssh "${!STAGE_SSH_VAR}" "
+            cd ${!STAGE_PATH_VAR} &&
+            wp db reset --yes &&
+            wp db import $(basename '$sql_dump') &&
+            wp search-replace '${!PROD_URL_VAR}' '${!STAGE_URL_VAR}' --skip-columns=guid --quiet &&
+            wp option update siteurl '${!STAGE_URL_VAR}' &&
+            wp option update home '${!STAGE_URL_VAR}' &&
+            wp option update blog_public 0 &&
+            wp cache flush
+        "
+        
+        log_success "Database imported and configured for staging"
+    }
+    
+    cleanup_temp_files() {
+        local sql_dump="$1"
+        
+        log_step "Cleaning up temporary files..."
+        ssh "${!PROD_SSH_VAR}" "rm -f ${!PROD_PATH_VAR}/$(basename "$sql_dump")" 2>/dev/null || true
+        ssh "${!STAGE_SSH_VAR}" "rm -f ${!STAGE_PATH_VAR}/$(basename "$sql_dump")" 2>/dev/null || true
+        rm -f "$sql_dump"
+        
+        log_success "Temporary files cleaned up"
+    }
+}
+
+# === FILE MANAGER CLASS ===
+class_FileManager() {
+    sync_wp_content() {
+        log_step "Syncing wp-content directory..."
+        
+        rsync -az --delete \
+            "${!PROD_SSH_VAR}:${!PROD_PATH_VAR}/wp-content/" \
+            "${!STAGE_SSH_VAR}:${!STAGE_PATH_VAR}/wp-content/"
+        
+        log_success "wp-content synchronized"
+    }
+    
+    update_staging_config() {
+        log_step "Updating staging-specific configuration..."
+        
+        ssh "${!STAGE_SSH_VAR}" "
+            cd ${!STAGE_PATH_VAR} &&
+            wp config set WP_DEBUG true --type=constant --quiet &&
+            wp config set WP_DEBUG_LOG true --type=constant --quiet &&
+            wp config set WP_DEBUG_DISPLAY false --type=constant --quiet &&
+            wp config set WP_ENV 'staging' --type=constant --quiet 2>/dev/null || true
+        "
+        
+        log_success "Staging configuration updated"
+    }
+}
+
+# === INTERACTIVE MODE FUNCTIONS ===
+confirm_operation() {
+    if [ "$INTERACTIVE_MODE" = true ]; then
+        echo ""
+        log_warning "This will overwrite the current staging environment!"
+        log_warning "Production: ${!PROD_URL_VAR} (${!PROD_PATH_VAR})"
+        log_warning "Staging: ${!STAGE_URL_VAR} (${!STAGE_PATH_VAR})"
+        echo ""
+        
+        read -p "Do you want to continue? (y/N): " -r
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            log_info "Operation cancelled by user"
+            exit 0
+        fi
+    fi
+}
+
+show_usage() {
+    cat << EOF
+WordPress Production to Staging Clone Script
+
+Usage: $0 [OPTIONS] SITE_KEY
+
+Arguments:
+  SITE_KEY              Site identifier (e.g., 'yoursite' for YOURSITE_* variables)
+
+Options:
+  -i, --interactive     Run in interactive mode with confirmation prompts
+  -h, --help           Show this help message
+
+Examples:
+  $0 yoursite                    # Automated mode (for cron jobs)
+  $0 --interactive yoursite      # Interactive mode with confirmations
+  $0 -i yoursite                 # Interactive mode (short form)
+
+Configuration:
+  Set up your .env file with variables like:
+  YOURSITE_PROD_SSH=user@prod-server.com
+  YOURSITE_STAGE_SSH=user@stage-server.com
+  YOURSITE_PROD_PATH=/path/to/prod/wp
+  YOURSITE_STAGE_PATH=/path/to/stage/wp
+  YOURSITE_PROD_URL=https://yoursite.com
+  YOURSITE_STAGE_URL=https://staging.yoursite.com
+
+EOF
+}
+
+# === MAIN CLONE OPERATION ===
+perform_clone() {
+    local site_key="$1"
+    
+    # Initialize variable names
+    PROD_SSH_VAR="${SITE_KEY}_PROD_SSH"
+    STAGE_SSH_VAR="${SITE_KEY}_STAGE_SSH"
+    PROD_PATH_VAR="${SITE_KEY}_PROD_PATH"
+    STAGE_PATH_VAR="${SITE_KEY}_STAGE_PATH"
+    PROD_URL_VAR="${SITE_KEY}_PROD_URL"
+    STAGE_URL_VAR="${SITE_KEY}_STAGE_URL"
+    
+    log_info "Starting WordPress production to staging clone for: $SITE_KEY"
+    
+    # Validate configuration
+    if ! class_Validator validate_site_key "$site_key"; then
+        exit 1
+    fi
+    
+    # Validate SSH connections
+    if ! class_Validator validate_ssh_connections; then
+        exit 1
+    fi
+    
+    # Confirm operation in interactive mode
+    confirm_operation
+    
+    # Create staging backup
+    local backup_file
+    backup_file=$(class_BackupManager create_staging_backup)
+    
+    # Export production database
+    local sql_dump
+    sql_dump=$(class_DatabaseManager export_production_db)
+    
+    # Import to staging
+    class_DatabaseManager import_to_staging "$sql_dump"
+    
+    # Sync files
+    class_FileManager sync_wp_content
+    
+    # Update staging configuration
+    class_FileManager update_staging_config
+    
+    # Cleanup
+    class_DatabaseManager cleanup_temp_files "$sql_dump"
+    class_BackupManager cleanup_old_backups
+    
+    log_success "Clone completed successfully for $SITE_KEY!"
+    
+    if [ -n "$backup_file" ]; then
+        log_info "Previous staging backup saved as: $backup_file"
+    fi
 }
 
 # === MAIN EXECUTION ===
 main() {
-  echo "🚀 Starting WordPress production to staging clone..."
-  echo "   Production: ${PROD_URL} (${PROD_SITE_PATH})"
-  echo "   Staging: ${STAGING_URL} (${STAGING_SITE_PATH})"
-  echo ""
-  
-  # Validate configuration
-  validate_config
-  
-  # Confirm before proceeding
-  if [ "$1" != "--force" ]; then
-    echo "⚠️  This will overwrite the current staging environment!"
-    echo "   A backup will be created before proceeding."
-    echo ""
-    read "confirm?Do you want to continue? (y/N): "
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-      echo "❌ Operation cancelled."
-      exit 0
+    # Parse command line arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -i|--interactive)
+                INTERACTIVE_MODE=true
+                shift
+                ;;
+            -h|--help)
+                show_usage
+                exit 0
+                ;;
+            -*)
+                log_error "Unknown option: $1"
+                show_usage
+                exit 1
+                ;;
+            *)
+                if [ -z "$SITE_KEY" ]; then
+                    SITE_KEY="$1"
+                else
+                    log_error "Multiple site keys provided. Please specify only one."
+                    exit 1
+                fi
+                shift
+                ;;
+        esac
+    done
+    
+    # Check if site key was provided
+    if [ -z "$SITE_KEY" ]; then
+        log_error "Site key is required"
+        show_usage
+        exit 1
     fi
-  fi
-  
-  # Create backup of current staging
-  create_staging_backup
-  
-  # Clone production to staging
-  clone_database
-  clone_files
-  
-  # Cleanup old backups
-  cleanup_old_backups
-  
-  echo ""
-  echo "✅ WordPress production to staging clone completed successfully!"
-  echo "   Staging site: ${STAGING_URL}"
-  echo "   Staging path: ${STAGING_SITE_PATH}"
-  echo ""
-  echo "🔧 Next steps:"
-  echo "   - Test the staging site functionality"
-  echo "   - Update any staging-specific plugins or themes"
-  echo "   - Configure staging-specific settings"
+    
+    # Load environment and perform clone
+    load_environment
+    perform_clone "$SITE_KEY"
 }
 
-# === SCRIPT EXECUTION ===
-# Show usage if help is requested
-if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
-  echo "WordPress Production to Staging Clone Script"
-  echo ""
-  echo "Usage: $0 [--force]"
-  echo ""
-  echo "Options:"
-  echo "  --force    Skip confirmation prompt"
-  echo "  -h, --help Show this help message"
-  echo ""
-  echo "Configuration:"
-  echo "  All configuration is handled via the .env file."
-  echo "  See .env.example for required variables."
-  exit 0
-fi
-
-# Run main function
+# Run main function with all arguments
 main "$@"

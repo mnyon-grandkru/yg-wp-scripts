@@ -1,23 +1,26 @@
-# WordPress Production to Staging Clone Script
+# WordPress Production to Staging Clone Script (Hybrid Approach)
 
-This script clones a WordPress production environment to staging for testing and development purposes.
+This script clones a WordPress production environment to staging with support for both interactive and automated modes. It combines the best features of both simple and comprehensive approaches.
 
 ## Features
 
+- **Multi-Site Support**: Handle multiple sites with different configurations using site keys
+- **Dual Mode Operation**: Interactive mode for manual operations, automated mode for cron jobs
+- **Object-Oriented Design**: Clean, maintainable code with separate classes for different operations
 - **Complete Environment Cloning**: Copies both database and files from production to staging
 - **Automatic Backup**: Creates a backup of the current staging environment before cloning
 - **URL Replacement**: Automatically updates all URLs from production to staging
-- **Database Configuration**: Updates database settings for staging environment
 - **Staging-Specific Settings**: Configures debug mode and other staging-specific options
-- **Safety Features**: Includes confirmation prompts and validation
-- **Cleanup**: Automatically removes old staging backups
+- **Safety Features**: Includes validation, SSH connection testing, and confirmation prompts
+- **Cleanup**: Automatically removes old staging backups and temporary files
 
 ## Prerequisites
 
-- SSH access to the server
-- WordPress CLI (wp-cli) installed on the server
+- SSH access to both production and staging servers
+- WordPress CLI (wp-cli) installed on both servers
 - MySQL access for database operations
 - Proper file permissions for the staging directory
+- Bash shell (version 4.0 or higher)
 
 ## Configuration
 
@@ -26,22 +29,27 @@ This script clones a WordPress production environment to staging for testing and
    cp .env.example .env
    ```
 
-2. Update the `.env` file with your specific configuration:
-   - SSH connection details
-   - Production and staging paths
-   - Database credentials
-   - URLs for both environments
+2. Update the `.env` file with your site configurations using the pattern:
+   ```bash
+   SITEKEY_PROD_SSH="user@prod-server.com"
+   SITEKEY_STAGE_SSH="user@stage-server.com"
+   SITEKEY_PROD_PATH="/path/to/production/wordpress"
+   SITEKEY_STAGE_PATH="/path/to/staging/wordpress"
+   SITEKEY_PROD_URL="https://yoursite.com"
+   SITEKEY_STAGE_URL="https://staging.yoursite.com"
+   ```
 
 ## Usage
 
-### Basic Usage
+### Interactive Mode (Manual Operations)
 ```bash
-./clone-to-staging.sh
+./clone-to-staging.sh --interactive yoursite
+./clone-to-staging.sh -i yoursite
 ```
 
-### Force Mode (Skip Confirmation)
+### Automated Mode (Cron Jobs)
 ```bash
-./clone-to-staging.sh --force
+./clone-to-staging.sh yoursite
 ```
 
 ### Help
@@ -51,39 +59,48 @@ This script clones a WordPress production environment to staging for testing and
 
 ## What the Script Does
 
-1. **Validation**: Checks that all required configuration variables are set
-2. **Confirmation**: Prompts for user confirmation (unless using --force)
+1. **Validation**: 
+   - Checks that all required configuration variables are set for the site key
+   - Validates SSH connections to both production and staging servers
+2. **Confirmation**: Prompts for user confirmation in interactive mode
 3. **Backup**: Creates a backup of the current staging environment
 4. **Database Clone**: 
    - Exports production database
-   - Creates/updates staging database
-   - Updates database configuration
+   - Uploads dump to staging server
+   - Resets staging database and imports production data
    - Replaces all URLs from production to staging
+   - Updates WordPress options for staging environment
 5. **Files Clone**: 
-   - Copies all files from production to staging
+   - Syncs wp-content directory from production to staging
    - Updates wp-config.php for staging environment
-   - Enables debug mode for staging
-6. **Cleanup**: Removes old staging backups
+   - Enables debug mode and staging-specific settings
+6. **Cleanup**: Removes temporary files and old staging backups
 
 ## Configuration Variables
 
-### Required Variables
-- `PROD_SITE_PATH`: Path to production WordPress installation
-- `STAGING_SITE_PATH`: Path to staging WordPress installation
-- `PROD_URL`: Production site URL
-- `STAGING_URL`: Staging site URL
-- `PROD_DB_NAME`: Production database name
-- `STAGING_DB_NAME`: Staging database name
-- `REMOTE_USER`: SSH username
-- `REMOTE_HOST`: SSH hostname
+### Required Variables (per site)
+Each site requires 6 variables with the pattern `SITEKEY_VARIABLE`:
 
-### Optional Variables
-- `STAGING_DB_HOST`: Staging database host (default: localhost)
-- `STAGING_DB_USER`: Staging database user
-- `STAGING_DB_PASSWORD`: Staging database password
-- `STAGING_ENV`: Staging environment identifier
-- `STAGING_BACKUP_DIR`: Directory for staging backups
-- `STAGING_BACKUP_RETENTION_DAYS`: Days to keep staging backups
+- `SITEKEY_PROD_SSH`: SSH connection string for production server
+- `SITEKEY_STAGE_SSH`: SSH connection string for staging server
+- `SITEKEY_PROD_PATH`: Path to production WordPress installation
+- `SITEKEY_STAGE_PATH`: Path to staging WordPress installation
+- `SITEKEY_PROD_URL`: Production site URL
+- `SITEKEY_STAGE_URL`: Staging site URL
+
+### Example Configuration
+```bash
+# For a site called 'yoursite'
+YOURSITE_PROD_SSH="user@prod-server.com"
+YOURSITE_STAGE_SSH="user@stage-server.com"
+YOURSITE_PROD_PATH="/var/www/yoursite"
+YOURSITE_STAGE_PATH="/var/www/yoursite-staging"
+YOURSITE_PROD_URL="https://yoursite.com"
+YOURSITE_STAGE_URL="https://staging.yoursite.com"
+```
+
+### Global Configuration
+- `BACKUP_RETENTION_DAYS`: Days to keep staging backups (default: 7)
 
 ## Safety Features
 
@@ -117,3 +134,5 @@ The script provides detailed output during execution. Check the console output f
 - Use strong database passwords
 - Ensure SSH keys are properly configured
 - Regularly update staging backups
+
+

@@ -111,25 +111,37 @@ validate_ssh_connections() {
     return 0
 }
 
-# === SSH WRAPPER FUNCTIONS ===
-ssh_prod() {
+# === COMMAND EXECUTION AGENTS ===
+local_command_agent() {
+    # Execute command locally using bash
+    bash -c "$*"
+}
+
+remote_command_agent() {
+    local ssh_target="$1"
+    shift
+    ssh "$ssh_target" "$@"
+}
+
+# === COMMAND CLIENT ===
+command_client() {
+    local target="$1"
+    shift
+
     if [ "$LOCAL_MODE" = true ]; then
-        # Local mode - execute commands directly
-        "$@"
+        local_command_agent "$*"
     else
-        # Remote mode - use SSH to production
-        ssh "${!PROD_SSH_VAR}" "$@"
+        remote_command_agent "$target" "$@"
     fi
 }
 
+# === SERVER INTERFACE FUNCTIONS ===
+ssh_prod() {
+    command_client "${!PROD_SSH_VAR}" "$*"
+}
+
 ssh_stage() {
-    if [ "$LOCAL_MODE" = true ]; then
-        # Local mode - execute commands directly
-        "$@"
-    else
-        # Remote mode - use SSH to staging
-        ssh "${!STAGE_SSH_VAR}" "$@"
-    fi
+    command_client "${!STAGE_SSH_VAR}" "$*"
 }
 
 # === BACKUP FUNCTIONS ===

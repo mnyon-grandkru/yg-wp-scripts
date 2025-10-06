@@ -185,9 +185,20 @@ cleanup_temp_files() {
 sync_wp_content() {
     log_step "Syncing wp-content directory..."
 
-    rsync -az --delete \
-        "${!PROD_SSH_VAR}:${!PROD_PATH_VAR}/wp-content/" \
-        "${!STAGE_SSH_VAR}:${!STAGE_PATH_VAR}/wp-content/"
+    # Check if production and staging are on the same machine
+    local prod_host=$(echo "${!PROD_SSH_VAR}" | cut -d'@' -f2)
+    local stage_host=$(echo "${!STAGE_SSH_VAR}" | cut -d'@' -f2)
+
+    if [ "$prod_host" = "$stage_host" ]; then
+        # Same machine - use local rsync for efficiency
+        log_step "Same machine detected, using local rsync..."
+        ssh_prod "rsync -az --delete ${!PROD_PATH_VAR}/wp-content/ ${!STAGE_PATH_VAR}/wp-content/"
+    else
+        # Different machines - use remote rsync
+        rsync -az --delete \
+            "${!PROD_SSH_VAR}:${!PROD_PATH_VAR}/wp-content/" \
+            "${!STAGE_SSH_VAR}:${!STAGE_PATH_VAR}/wp-content/"
+    fi
 
     log_success "wp-content synchronized"
 }
@@ -407,13 +418,19 @@ cmd_restore() {
         exit 1
     fi
 
+    # Extract site name from backup filename (format: sitename_db_backup_timestamp.sql)
+    local site_name=$(basename "$db_backup" | sed 's/_db_backup_.*//')
+    local site_path="${REMOTE_HOME_DIRECTORY}/public_html/${site_name}"
+
+    log_info "Restoring site: $site_name to path: $site_path"
+
     # Upload and restore database
     log_step "Uploading database backup..."
     scp "$db_backup" "${REMOTE_USER}@${REMOTE_HOST}:~/${REMOTE_BACKUP_DIR}/"
 
     log_step "Restoring database..."
     ssh "${REMOTE_USER}@${REMOTE_HOST}" "
-        cd ~/${REMOTE_WP_PATH} &&
+        cd ~/${site_path} &&
         wp db import ~/${REMOTE_BACKUP_DIR}/$(basename '$db_backup') --quiet
     "
 

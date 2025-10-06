@@ -117,7 +117,7 @@ BACKUP_RETENTION_DAYS=7
 REMOTE_USER="your_username"
 REMOTE_HOST="your-server.com"
 REMOTE_BACKUP_DIR="wp_backups"
-REMOTE_WP_PATH="/var/www/wordpress"
+REMOTE_HOME_DIRECTORY="/home1/msenmsmy"
 ```
 
 ### Configuration Validation

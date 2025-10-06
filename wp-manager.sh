@@ -151,8 +151,8 @@ create_staging_backup() {
 
     log_step "Creating staging backup..."
 
-    if ssh_stage "cd ${!STAGE_PATH_VAR} && wp db check --quiet" 2>/dev/null; then
-        ssh_stage "cd ${!STAGE_PATH_VAR} && wp db export ${backup_file} --quiet"
+    if ssh_stage "cd ${!STAGE_PATH_VAR} && wp db check --quiet" >/dev/null 2>&1; then
+        ssh_stage "cd ${!STAGE_PATH_VAR} && wp db export ${backup_file} --quiet" >/dev/null 2>&1
         log_success "Staging backup created: ${backup_file}"
         echo "${backup_file}"
     else
@@ -197,13 +197,13 @@ import_to_staging() {
     log_step "Importing database to staging..."
     ssh_stage "
         cd ${!STAGE_PATH_VAR} &&
-        wp db reset --yes &&
-        wp db import ${sql_dump} &&
-        wp search-replace '${!PROD_URL_VAR}' '${!STAGE_URL_VAR}' --skip-columns=guid --quiet &&
-        wp option update siteurl '${!STAGE_URL_VAR}' &&
-        wp option update home '${!STAGE_URL_VAR}' &&
-        wp option update blog_public 0 &&
-        wp cache flush
+        wp db reset --yes >/dev/null 2>&1 &&
+        wp db import ${sql_dump} >/dev/null 2>&1 &&
+        wp search-replace '${!PROD_URL_VAR}' '${!STAGE_URL_VAR}' --skip-columns=guid --quiet >/dev/null 2>&1 &&
+        wp option update siteurl '${!STAGE_URL_VAR}' >/dev/null 2>&1 &&
+        wp option update home '${!STAGE_URL_VAR}' >/dev/null 2>&1 &&
+        wp option update blog_public 0 >/dev/null 2>&1 &&
+        wp cache flush >/dev/null 2>&1
     "
 
     log_success "Database imported and configured for staging"
@@ -252,10 +252,10 @@ update_staging_config() {
 
     ssh_stage "
         cd ${!STAGE_PATH_VAR} &&
-        wp config set WP_DEBUG true --type=constant --quiet &&
-        wp config set WP_DEBUG_LOG true --type=constant --quiet &&
-        wp config set WP_DEBUG_DISPLAY false --type=constant --quiet &&
-        wp config set WP_ENV 'staging' --type=constant --quiet 2>/dev/null || true
+        wp config set WP_DEBUG true --type=constant --quiet >/dev/null 2>&1 &&
+        wp config set WP_DEBUG_LOG true --type=constant --quiet >/dev/null 2>&1 &&
+        wp config set WP_DEBUG_DISPLAY false --type=constant --quiet >/dev/null 2>&1 &&
+        wp config set WP_ENV 'staging' --type=constant --quiet >/dev/null 2>&1 || true
     "
 
     log_success "Staging configuration updated"

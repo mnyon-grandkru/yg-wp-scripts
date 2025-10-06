@@ -12,6 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/.env"
 INTERACTIVE_MODE=false
+LOCAL_MODE=true
 BACKUP_RETENTION_DAYS=7
 
 # === SHARED LIBRARIES ===
@@ -83,6 +84,12 @@ validate_site_key() {
 }
 
 validate_ssh_connections() {
+    if [ "$LOCAL_MODE" = true ]; then
+        log_step "Local mode: skipping SSH validation..."
+        log_success "Local mode validation complete"
+        return 0
+    fi
+
     local prod_ssh="${!PROD_SSH_VAR}"
     local stage_ssh="${!STAGE_SSH_VAR}"
 
@@ -106,11 +113,23 @@ validate_ssh_connections() {
 
 # === SSH WRAPPER FUNCTIONS ===
 ssh_prod() {
-    ssh "${!PROD_SSH_VAR}" "$1"
+    if [ "$LOCAL_MODE" = true ]; then
+        # Local mode - execute commands directly
+        "$@"
+    else
+        # Remote mode - use SSH to production
+        ssh "${!PROD_SSH_VAR}" "$@"
+    fi
 }
 
 ssh_stage() {
-    ssh "${!STAGE_SSH_VAR}" "$1"
+    if [ "$LOCAL_MODE" = true ]; then
+        # Local mode - execute commands directly
+        "$@"
+    else
+        # Remote mode - use SSH to staging
+        ssh "${!STAGE_SSH_VAR}" "$@"
+    fi
 }
 
 # === BACKUP FUNCTIONS ===
@@ -153,8 +172,15 @@ export_production_db() {
 import_to_staging() {
     local sql_dump="$1"
 
-    log_step "Copying database dump to staging server..."
-    ssh_prod "scp ${!PROD_PATH_VAR}/${sql_dump} ${!STAGE_SSH_VAR}:${!STAGE_PATH_VAR}/"
+    if [ "$LOCAL_MODE" = true ]; then
+        # Local mode - use direct copy
+        log_step "Local mode: copying database dump..."
+        cp "${!PROD_PATH_VAR}/${sql_dump}" "${!STAGE_PATH_VAR}/"
+    else
+        # Remote mode - use scp
+        log_step "Copying database dump to staging server..."
+        ssh_prod "scp ${!PROD_PATH_VAR}/${sql_dump} ${!STAGE_SSH_VAR}:${!STAGE_PATH_VAR}/"
+    fi
 
     log_step "Importing database to staging..."
     ssh_stage "
@@ -185,19 +211,25 @@ cleanup_temp_files() {
 sync_wp_content() {
     log_step "Syncing wp-content directory..."
 
-    # Check if production and staging are on the same machine
-    local prod_host=$(echo "${!PROD_SSH_VAR}" | cut -d'@' -f2)
-    local stage_host=$(echo "${!STAGE_SSH_VAR}" | cut -d'@' -f2)
-
-    if [ "$prod_host" = "$stage_host" ]; then
-        # Same machine - use local rsync for efficiency
-        log_step "Same machine detected, using local rsync..."
-        ssh_prod "rsync -az --delete ${!PROD_PATH_VAR}/wp-content/ ${!STAGE_PATH_VAR}/wp-content/"
+    if [ "$LOCAL_MODE" = true ]; then
+        # Local mode - use direct rsync
+        log_step "Local mode: using direct rsync..."
+        rsync -az --delete "${!PROD_PATH_VAR}/wp-content/" "${!STAGE_PATH_VAR}/wp-content/"
     else
-        # Different machines - use remote rsync
-        rsync -az --delete \
-            "${!PROD_SSH_VAR}:${!PROD_PATH_VAR}/wp-content/" \
-            "${!STAGE_SSH_VAR}:${!STAGE_PATH_VAR}/wp-content/"
+        # Check if production and staging are on the same machine
+        local prod_host=$(echo "${!PROD_SSH_VAR}" | cut -d'@' -f2)
+        local stage_host=$(echo "${!STAGE_SSH_VAR}" | cut -d'@' -f2)
+
+        if [ "$prod_host" = "$stage_host" ]; then
+            # Same machine - use local rsync for efficiency
+            log_step "Same machine detected, using local rsync..."
+            ssh_prod "rsync -az --delete ${!PROD_PATH_VAR}/wp-content/ ${!STAGE_PATH_VAR}/wp-content/"
+        else
+            # Different machines - use remote rsync
+            rsync -az --delete \
+                "${!PROD_SSH_VAR}:${!PROD_PATH_VAR}/wp-content/" \
+                "${!STAGE_SSH_VAR}:${!STAGE_PATH_VAR}/wp-content/"
+        fi
     fi
 
     log_success "wp-content synchronized"
@@ -240,7 +272,12 @@ confirm_operation() {
 cmd_clone() {
     local site_key="$1"
 
-    # Initialize variable names
+    # Validate configuration first to set SITE_KEY
+    if ! validate_site_key "$site_key"; then
+        exit 1
+    fi
+
+    # Initialize variable names after SITE_KEY is set
     PROD_SSH_VAR="${SITE_KEY}_PROD_SSH"
     STAGE_SSH_VAR="${SITE_KEY}_STAGE_SSH"
     PROD_PATH_VAR="${SITE_KEY}_PROD_PATH"
@@ -249,11 +286,6 @@ cmd_clone() {
     STAGE_URL_VAR="${SITE_KEY}_STAGE_URL"
 
     log_info "Starting WordPress production to staging clone for: $SITE_KEY"
-
-    # Validate configuration
-    if ! validate_site_key "$site_key"; then
-        exit 1
-    fi
 
     # Validate SSH connections
     if ! validate_ssh_connections; then
@@ -295,16 +327,16 @@ cmd_clone() {
 cmd_archive() {
     local site_key="$1"
 
-    # Initialize variable names
+    # Validate configuration first to set SITE_KEY
+    if ! validate_site_key "$site_key"; then
+        exit 1
+    fi
+
+    # Initialize variable names after SITE_KEY is set
     PROD_SSH_VAR="${SITE_KEY}_PROD_SSH"
     PROD_PATH_VAR="${SITE_KEY}_PROD_PATH"
 
     log_info "Starting WordPress archive for: $SITE_KEY"
-
-    # Validate configuration
-    if ! validate_site_key "$site_key"; then
-        exit 1
-    fi
 
     # Create local backup directory
     local timestamp=$(date +'%Y-%m-%d_%H-%M-%S')
@@ -316,22 +348,38 @@ cmd_archive() {
     log_step "Exporting database..."
     ssh_prod "cd ${!PROD_PATH_VAR} && wp db export ${db_backup} --quiet"
 
-    # Download database
-    log_step "Downloading database backup..."
-    scp "${!PROD_SSH_VAR}:${!PROD_PATH_VAR}/${db_backup}" "$local_backup_dir/"
+    if [ "$LOCAL_MODE" = true ]; then
+        # Local mode - copy files directly
+        log_step "Local mode: copying database backup..."
+        cp "${!PROD_PATH_VAR}/${db_backup}" "$local_backup_dir/"
 
-    # Archive files
-    local files_backup="${site_key}_files_backup_${timestamp}.tar.gz"
-    log_step "Creating files archive..."
-    ssh_prod "cd ~ && tar --exclude='wp_backups' --exclude='node_modules' --exclude='.git' -czf ${files_backup} ${!PROD_PATH_VAR}"
+        # Archive files
+        local files_backup="${site_key}_files_backup_${timestamp}.tar.gz"
+        log_step "Creating files archive..."
+        tar --exclude='wp_backups' --exclude='node_modules' --exclude='.git' -czf "$local_backup_dir/${files_backup}" -C "$(dirname "${!PROD_PATH_VAR}")" "$(basename "${!PROD_PATH_VAR}")"
 
-    # Download files archive
-    log_step "Downloading files archive..."
-    scp "${!PROD_SSH_VAR}:~/${files_backup}" "$local_backup_dir/"
+        # Cleanup local files
+        log_step "Cleaning up local files..."
+        rm -f "${!PROD_PATH_VAR}/${db_backup}"
+    else
+        # Remote mode - use scp
+        # Download database
+        log_step "Downloading database backup..."
+        scp "${!PROD_SSH_VAR}:${!PROD_PATH_VAR}/${db_backup}" "$local_backup_dir/"
 
-    # Cleanup remote files
-    log_step "Cleaning up remote files..."
-    ssh_prod "rm -f ${!PROD_PATH_VAR}/${db_backup} ~/${files_backup}"
+        # Archive files
+        local files_backup="${site_key}_files_backup_${timestamp}.tar.gz"
+        log_step "Creating files archive..."
+        ssh_prod "cd ~ && tar --exclude='wp_backups' --exclude='node_modules' --exclude='.git' -czf ${files_backup} ${!PROD_PATH_VAR}"
+
+        # Download files archive
+        log_step "Downloading files archive..."
+        scp "${!PROD_SSH_VAR}:~/${files_backup}" "$local_backup_dir/"
+
+        # Cleanup remote files
+        log_step "Cleaning up remote files..."
+        ssh_prod "rm -f ${!PROD_PATH_VAR}/${db_backup} ~/${files_backup}"
+    fi
 
     log_success "Archive completed successfully!"
     log_info "Backup saved in: $local_backup_dir"
@@ -506,11 +554,14 @@ Commands:
 
 Options:
   -i, --interactive          Run in interactive mode with confirmation prompts
+  -l, --local               Run in local mode (default: script runs on same machine as WordPress)
+  -r, --remote              Run in remote mode (use SSH connections)
   -h, --help                Show this help message
 
 Examples:
-  $0 clone yoursite                    # Clone yoursite to staging
+  $0 clone yoursite                    # Clone yoursite to staging (local mode, default)
   $0 clone -i yoursite                 # Interactive clone with confirmations
+  $0 clone -r yoursite                 # Remote mode clone (use SSH connections)
   $0 archive yoursite                  # Archive yoursite to local storage
   $0 backup                            # Backup all configured sites
   $0 restore 2025-07-20_23-59-00      # Restore from specific backup
@@ -538,6 +589,14 @@ main() {
         case $1 in
             -i|--interactive)
                 INTERACTIVE_MODE=true
+                shift
+                ;;
+            -l|--local)
+                LOCAL_MODE=true
+                shift
+                ;;
+            -r|--remote)
+                LOCAL_MODE=false
                 shift
                 ;;
             -h|--help)

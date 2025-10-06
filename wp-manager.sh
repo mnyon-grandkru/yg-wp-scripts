@@ -35,7 +35,7 @@ log_error() {
 }
 
 log_step() {
-    echo "🔹 $1"
+    echo "🔹 $1" >&2
 }
 
 # === ENVIRONMENT FUNCTIONS ===
